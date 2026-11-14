@@ -17,10 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装工具链
+      - name: 安装低版本gfortran + 依赖（重点！）
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gfortran libnetcdff-dev libnetcdf-dev make git
+          sudo apt-get install -y -qq gfortran-9 gcc-9 libnetcdff-dev make git
+          sudo update-alternatives --install /usr/bin/gfortran gfortran /usr/bin/gfortran-9 90
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90
           gfortran --version | head -1
           nf-config --version
           echo "netcdf mod: $(nf-config --includedir)"
@@ -43,13 +45,12 @@ jobs:
           sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
           grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
 
-      - name: 编译 muffin（configure 方式）
+      - name: 编译 muffin（genie-main原生make，指定NETCDF）
         run: |
-          cd cgenie.muffin
-          ./configure NETCDF_DIR=/usr NETCDF_NAME=netcdff
+          cd cgenie.muffin/genie-main
           make clean > /dev/null 2>&1 || true
-          make -j2 2>&1 | tail -40
-          ls -lh genie-main/genie.exe
+          make NETCDF_DIR=/usr NETCDF_NAME=netcdff F90=gfortran-9 CC=gcc-9 2>&1 | tail -40
+          ls -lh genie.exe
           echo "BUILD_OK=1" >> $GITHUB_ENV
 
       - name: 检查 320 Ma 古地理数据
