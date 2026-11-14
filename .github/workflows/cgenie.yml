@@ -11,18 +11,16 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 300
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装低版本gfortran + 依赖（重点！）
+      - name: 安装工具链
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gfortran-9 gcc-9 libnetcdff-dev make git
-          sudo update-alternatives --install /usr/bin/gfortran gfortran /usr/bin/gfortran-9 90
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-9 90
+          sudo apt-get install -y -qq gfortran libnetcdff-dev make git
           gfortran --version | head -1
           nf-config --version
           echo "netcdf mod: $(nf-config --includedir)"
@@ -45,11 +43,11 @@ jobs:
           sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
           grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
 
-      - name: 编译 muffin（genie-main原生make，指定NETCDF）
+      - name: 编译 muffin
         run: |
           cd cgenie.muffin/genie-main
           make clean > /dev/null 2>&1 || true
-          make NETCDF_DIR=/usr NETCDF_NAME=netcdff F90=gfortran-9 CC=gcc-9 2>&1 | tail -40
+          make NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -30
           ls -lh genie.exe
           echo "BUILD_OK=1" >> $GITHUB_ENV
 
@@ -60,7 +58,7 @@ jobs:
 
       - name: 生成 320 Ma 配置
         run: |
-          bash ./cgenie-visean-actions/scripts/make_config.sh
+          bash scripts/make_config.sh
 
       - name: 试运行（可选）
         if: ${{ github.event.inputs.run_years != '0' && github.event.inputs.run_years != '' }}
