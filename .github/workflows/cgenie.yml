@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 300
 
     steps:
@@ -20,17 +20,16 @@ jobs:
       - name: 安装工具链
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq gfortran libnetcdff-dev make git
+          sudo apt-get install -y -qq gfortran libnetcdff-dev libnetcdf-dev make git
           gfortran --version | head -1
           nf-config --version
-          echo "netcdf mod: $(nf-config --includedir)"
 
       - name: 缓存 cGENIE 源码
         id: cache-src
         uses: actions/cache@v4
         with:
           path: cgenie.muffin
-          key: cgenie-src-v1
+          key: cgenie-src-v2
 
       - name: 获取源码
         if: steps.cache-src.outputs.cache-hit != 'true'
@@ -43,22 +42,43 @@ jobs:
           sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
           grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
 
-      - name: 编译 muffin
+      - name: 【关键修复】彻底移除 Makefile 中的 libnc1 依赖
+        run: |
+          cd cgenie.muffin/genie-main
+          # 1. 直接删除所有包含 libnc1 的行（不要只注释，必须删除）
+          sed -i '/libnc1/d' Makefile
+          
+          # 2. 移除可能的拼接依赖（防止残留）
+          sed -i 's|/genie-lib/libnc1/libnc1\.a||g' Makefile
+          sed -i 's|libnc1\.a||g' Makefile
+          sed -i 's|-lnc1||g' Makefile
+          
+          # 3. 验证是否清理干净
+          echo "==== 检查 Makefile 是否还有 libnc1 残留 ===="
+          if grep -q 'libnc1' Makefile; then
+            echo "❌ 错误：Makefile 中仍存在 libnc1 引用！"
+            grep -n 'libnc1' Makefile
+            exit 1
+          else
+            echo "✅ 成功：Makefile 已清除所有 libnc1 依赖。"
+          fi
+
+      - name: 编译 muffin（genie-main原生make，系统netcdf）
         run: |
           cd cgenie.muffin/genie-main
           make clean > /dev/null 2>&1 || true
-          make NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -30
+          make NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -40
           ls -lh genie.exe
           echo "BUILD_OK=1" >> $GITHUB_ENV
 
       - name: 检查 320 Ma 古地理数据
         run: |
           ls cgenie.muffin/genie-paleo | grep -E "^(300|320|340|360)" || true
-          ls -lh cgenie.muffin/genie-paleo/320ebP2_/ | head -12
+          ls -lh cgenie.muffin/genie-paleo/320ebP2_/ | head -12 || true
 
       - name: 生成 320 Ma 配置
         run: |
-          bash scripts/make_config.sh
+          bash ./cgenie-visean-actions/scripts/make_config.sh
 
       - name: 试运行（可选）
         if: ${{ github.event.inputs.run_years != '0' && github.event.inputs.run_years != '' }}
