@@ -1,0 +1,71 @@
+name: Build cGENIE (muffin)
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      run_years:
+        description: '模型积分年数，填0只编译不跑模型'
+        default: '1000'
+        required: true
+
+jobs:
+  build-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran libnetcdff-dev make git python3
+
+      - name: Cache cgenie.muffin source
+        id: cache-cgenie
+        uses: actions/cache@v4
+        with:
+          path: cgenie.muffin
+          key: ${{ runner.os }}-cgenie-muffin-v1
+
+      - name: Clone cgenie.muffin
+        if: steps.cache-cgenie.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/ridgwell/cgenie.muffin.git
+
+      - name: Patch finc.py py2->py3
+        run: |
+          sed -i 's/^print /print(/g; s/$/)/' cgenie.muffin/genie-main/scripts/finc.py || true
+
+      - name: Build cGENIE
+        run: |
+          cd cgenie.muffin/genie-main
+          make NETCDF_DIR=/usr NETCDF_NAME=netcdff
+          ls -l genie.exe
+        continue-on-error: false
+
+      - name: Generate Visean config p0320c
+        run: |
+          chmod +x ./cgenie-visean-actions/scripts/make_config.sh
+          ./cgenie-visean-actions/scripts/make_config.sh
+
+      - name: Run cGENIE model
+        if: ${{ github.event.inputs.run_years != '0' }}
+        run: |
+          cd cgenie.muffin/genie-main
+          ./runmuffin.sh p0320c BASES RUN330 ${{ github.event.inputs.run_years }}
+
+      - name: Pack artifact
+        run: |
+          mkdir -p upload/cgenie_output upload/configs
+          cp cgenie.muffin/genie-main/genie.exe upload/
+          cp cgenie.muffin/genie-main/configs/p0320c*.config upload/configs/
+          cp -r cgenie.muffin/genie-main/output/* upload/cgenie_output/ || true
+          zip -r cgenie-build.zip upload/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cgenie-build
+          path: cgenie-build.zip
