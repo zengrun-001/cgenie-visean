@@ -5,67 +5,86 @@ on:
   workflow_dispatch:
     inputs:
       run_years:
-        description: '模型积分年数，填0只编译不跑模型'
-        default: '1000'
-        required: true
+        description: "积分年数（0 = 只编译不运行）"
+        required: false
+        default: "0"
 
 jobs:
-  build-run:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 300
+
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: 安装工具链
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gfortran libnetcdff-dev make git python3
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gfortran libnetcdff-dev make git
+          gfortran --version | head -1
+          nf-config --version
+          echo "netcdf mod: $(nf-config --includedir)"
 
-      - name: Cache cgenie.muffin source
-        id: cache-cgenie
+      - name: 缓存 cGENIE 源码
+        id: cache-src
         uses: actions/cache@v4
         with:
           path: cgenie.muffin
-          key: ${{ runner.os }}-cgenie-muffin-v1
+          key: cgenie-src-v1
 
-      - name: Clone cgenie.muffin
-        if: steps.cache-cgenie.outputs.cache-hit != 'true'
+      - name: 获取源码
+        if: steps.cache-src.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 https://github.com/ridgwell/cgenie.muffin.git
+          git clone --depth 1 https://github.com/derpycode/cgenie.muffin.git
+          du -sh cgenie.muffin
 
-      - name: Patch finc.py py2->py3
+      - name: 修补 Python2 脚本
         run: |
-          sed -i 's/^print /print(/g; s/$/)/' cgenie.muffin/genie-main/scripts/finc.py || true
+          sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
+          grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
 
-      - name: Build cGENIE
-        run: |
-          cd cgenie.muffin/genie-main
-          make NETCDF_DIR=/usr NETCDF_NAME=netcdff
-          ls -l genie.exe
-        continue-on-error: false
-
-      - name: Generate Visean config p0320c
-        run: |
-          chmod +x ./cgenie-visean-actions/scripts/make_config.sh
-          ./cgenie-visean-actions/scripts/make_config.sh
-
-      - name: Run cGENIE model
-        if: ${{ github.event.inputs.run_years != '0' }}
+      - name: 编译 muffin
         run: |
           cd cgenie.muffin/genie-main
-          ./runmuffin.sh p0320c BASES RUN330 ${{ github.event.inputs.run_years }}
+          make clean > /dev/null 2>&1 || true
+          make NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -30
+          ls -lh genie.exe
+          echo "BUILD_OK=1" >> $GITHUB_ENV
 
-      - name: Pack artifact
+      - name: 检查 320 Ma 古地理数据
         run: |
-          mkdir -p upload/cgenie_output upload/configs
-          cp cgenie.muffin/genie-main/genie.exe upload/
-          cp cgenie.muffin/genie-main/configs/p0320c*.config upload/configs/
-          cp -r cgenie.muffin/genie-main/output/* upload/cgenie_output/ || true
-          zip -r cgenie-build.zip upload/
+          ls cgenie.muffin/genie-paleo | grep -E "^(300|320|340|360)" || true
+          ls -lh cgenie.muffin/genie-paleo/320ebP2_/ | head -12
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: 生成 320 Ma 配置
+        run: |
+          bash scripts/make_config.sh
+
+      - name: 试运行（可选）
+        if: ${{ github.event.inputs.run_years != '0' && github.event.inputs.run_years != '' }}
+        continue-on-error: true
+        run: |
+          cd cgenie.muffin/genie-main
+          YEARS=${{ github.event.inputs.run_years }}
+          mkdir -p "$HOME/cgenie_output"
+          ./runmuffin.sh p0320c BASES RUN330 $YEARS 2>&1 | tail -40 || true
+          ls -lh "$HOME/cgenie_output" || true
+
+      - name: 打包产物
+        if: always()
+        run: |
+          mkdir -p out
+          cp cgenie.muffin/genie-main/genie.exe out/ 2>/dev/null || true
+          cp -r cgenie.muffin/genie-main/configs out/ 2>/dev/null || true
+          cp -r "$HOME/cgenie_output" out/ 2>/dev/null || true
+          tar -czf cgenie-build-$(date +%Y%m%d).tar.gz out 2>/dev/null || true
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: cgenie-build
-          path: cgenie-build.zip
+          path: |
+            cgenie-build-*.tar.gz
+            out/genie.exe
+          if-no-files-found: warn
