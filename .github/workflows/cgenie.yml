@@ -40,52 +40,49 @@ jobs:
       - name: 修补 Python2 脚本
         run: |
           sed -i 's/^\(\s*\)print \(.*\)$/\1print(\2)/' cgenie.muffin/genie-main/finc.py
-          grep -n "print(" cgenie.muffin/genie-main/finc.py | head -3 || true
 
-      - name: 【关键修复】彻底移除 Makefile 中的 libnc1 依赖
+      - name: 【终极修复】精准清理 Makefile 中的 libnc1 依赖
         run: |
           cd cgenie.muffin/genie-main
           
-          # 确认目录下的真实文件名（通常是小写 makefile）
-          echo "当前目录下的 makefile 文件:"
-          ls -l makefile* Makefile* 2>/dev/null || true
-          
-          # 定义变量，兼容大小写
+          # 1. 找到真正的 makefile 文件
           MF=""
-          if [ -f "makefile" ]; then MF="makefile"; fi
-          if [ -f "Makefile" ]; then MF="Makefile"; fi
+          [ -f "makefile" ] && MF="makefile"
+          [ -f "Makefile" ] && MF="Makefile"
           
           if [ -z "$MF" ]; then
-            echo "❌ 错误：找不到 makefile 或 Makefile！"
-            ls -la
+            echo "❌ 找不到 makefile"
             exit 1
           fi
           
-          echo "使用文件: $MF"
+          echo "正在清理 $MF 中的 libnc1 规则..."
           
-          # 1. 直接删除所有包含 libnc1 的行
-          sed -i '/libnc1/d' "$MF"
+          # 2. 删除专门针对 libnc1 的独立目标（例如 libnc1.a:）
+          sed -i '/libnc1.*:/d' "$MF"
           
-          # 2. 移除可能的拼接依赖（防止残留）
-          sed -i 's|/genie-lib/libnc1/libnc1\.a||g' "$MF"
-          sed -i 's|libnc1\.a||g' "$MF"
-          sed -i 's|-lnc1||g' "$MF"
+          # 3. 删除包含 cd 和 libnc1 的执行语句（例如 cd ../genie-lib/libnc1; make）
+          sed -i '/^[[:space:]]*cd.*libnc1/d' "$MF"
+          sed -i '/^[[:space:]]*.*make.*libnc1/d' "$MF"
           
-          # 3. 验证是否清理干净
-          echo "==== 检查 $MF 是否还有 libnc1 残留 ===="
+          # 4. 清理变量列表里的路径残留（例如 ../genie-lib/libnc1/libnc1.a），将其替换为空
+          sed -i 's|[^ \t]*libnc1[^ \t]*||g' "$MF"
+          
+          # 5. 验证
           if grep -q 'libnc1' "$MF"; then
-            echo "❌ 错误：$MF 中仍存在 libnc1 引用！"
+            echo "⚠️ 警告: 仍有残留，尝试全局清除"
             grep -n 'libnc1' "$MF"
-            exit 1
+            # 最后的兜底，直接删掉包含 libnc1 的行
+            sed -i '/libnc1/d' "$MF"
           else
-            echo "✅ 成功：$MF 已清除所有 libnc1 依赖。"
+            echo "✅ 完美清理 $MF 中的 libnc1 痕迹！"
           fi
 
-      - name: 编译 muffin（genie-main原生make，系统netcdf）
+      - name: 编译 muffin（genie-main原生make）
         run: |
           cd cgenie.muffin/genie-main
           make clean > /dev/null 2>&1 || true
-          make NETCDF_DIR=/usr NETCDF_NAME=netcdff 2>&1 | tail -40
+          # 为了安全，指定目标 genie.exe
+          make NETCDF_DIR=/usr NETCDF_NAME=netcdff genie.exe 2>&1 | tail -60
           ls -lh genie.exe
           echo "BUILD_OK=1" >> $GITHUB_ENV
 
@@ -116,7 +113,6 @@ jobs:
           cp -r cgenie.muffin/genie-main/configs out/ 2>/dev/null || true
           cp -r "$HOME/cgenie_output" out/ 2>/dev/null || true
           tar -czf cgenie-build-$(date +%Y%m%d).tar.gz out 2>/dev/null || true
-          ls -lh
 
       - uses: actions/upload-artifact@v4
         if: always()
